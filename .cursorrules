@@ -1,0 +1,8 @@
+# AI Coding Assistant Rules
+
+1.  **Language**: ALWAYS respond in Chinese (Simplified). The only exception is when code syntax requires English.
+    -   Explanations: Chinese (中文).
+    -   Comments: Chinese (中文) preferred.
+    -   Variable/Function Names: English (standard coding practice).
+2.  **Context**: You are working on "AI-Enhanced Note-Taking App" (AI 创意笔记本).
+3.  **Style**: Be professional, concise, and helpful.
