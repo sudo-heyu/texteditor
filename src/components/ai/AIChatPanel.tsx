@@ -228,7 +228,7 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             let userFriendlyMessage = `抱歉，连接 DeepSeek 时出错: ${errorMessage}`;
 
             if (errorCode === 'API_KEY_MISSING') {
-                userFriendlyMessage = 'AI 功能暂时不可用: API 密钥未配置。网站管理员需要配置 DEEPSEEK_API_KEY 环境变量。';
+                userFriendlyMessage = 'AI 功能暂时不可用: API 密钥未配置。网站管理员需要更新 src/lib/config.ts 文件中的 DEEPSEEK_API_KEY。';
             } else if (errorCode === 'RATE_LIMIT_ERROR') {
                 userFriendlyMessage = '请求频率过高: 已达到API速率限制，请稍后重试。';
             } else if (errorCode === 'QUOTA_EXHAUSTED') {

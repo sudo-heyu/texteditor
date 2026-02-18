@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { DEEPSEEK_API_KEY } from '@/lib/config';
 
 export const runtime = 'edge';
 
@@ -12,11 +13,11 @@ export async function POST(req: NextRequest) {
     try {
         const { messages } = await req.json();
 
-        if (!process.env.DEEPSEEK_API_KEY) {
-            console.error('DeepSeek API Key is missing in environment variables');
+        if (!DEEPSEEK_API_KEY) {
+            console.error('DeepSeek API Key is missing in configuration');
             return NextResponse.json({
                 error: {
-                    message: 'API Key is not configured. Please add DEEPSEEK_API_KEY to .env.local and RESTART the dev server.',
+                    message: 'API Key is not configured in the application code.',
                     code: 'API_KEY_MISSING'
                 }
             }, { status: 500 });
@@ -26,7 +27,7 @@ export async function POST(req: NextRequest) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+                'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
             },
             body: JSON.stringify({
                 model: 'deepseek-chat',
