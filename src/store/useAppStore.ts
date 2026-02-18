@@ -13,6 +13,14 @@ interface PendingEdit {
     isApplying: boolean
 }
 
+interface EditHistoryItem {
+    id: string
+    timestamp: number
+    previousContent: string
+    newContent: string
+    description?: string
+}
+
 interface AppState {
     isSidebarOpen: boolean
     viewMode: 'editor' | 'canvas' | 'split'
@@ -20,13 +28,16 @@ interface AppState {
     documents: FileDocument[]
     isAIPanelOpen: boolean
     aiMode: 'ask' | 'agent'
+    aiError: string | null
     editorInstance: Editor | null
     pendingEdit: PendingEdit | null
+    editHistory: EditHistoryItem[]
     toggleSidebar: () => void
     setViewMode: (mode: 'editor' | 'canvas' | 'split') => void
     setActiveFileId: (id: string | null) => void
     toggleAIPanel: () => void
     setAiMode: (mode: 'ask' | 'agent') => void
+    setAiError: (error: string | null) => void
     setEditorInstance: (editor: Editor | null) => void
     startPendingEdit: (originalHTML: string) => void
     finishPendingEdit: () => void
@@ -37,6 +48,11 @@ interface AppState {
     removeDocument: (id: string) => void
     updateDocument: (id: string, content: string) => void
     createNewFile: () => void
+
+    // Edit History
+    addEditHistory: (item: Omit<EditHistoryItem, 'id' | 'timestamp'>) => void
+    undoLastEdit: () => boolean
+    clearEditHistory: () => void
 }
 
 const STORAGE_KEY = 'ai-creative-notes-docs'
@@ -73,13 +89,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     documents: loadDocuments(),
     isAIPanelOpen: false,
     aiMode: 'ask',
+    aiError: null,
     editorInstance: null,
     pendingEdit: null,
+    editHistory: [],
     toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
     setViewMode: (mode) => set({ viewMode: mode }),
     setActiveFileId: (id) => set({ activeFileId: id }),
     toggleAIPanel: () => set((state) => ({ isAIPanelOpen: !state.isAIPanelOpen })),
     setAiMode: (mode) => set({ aiMode: mode }),
+    setAiError: (error) => set({ aiError: error }),
     setEditorInstance: (editor) => set({ editorInstance: editor }),
     startPendingEdit: (originalHTML) => set({
         pendingEdit: { originalHTML, isApplying: true }
@@ -126,5 +145,49 @@ export const useAppStore = create<AppState>((set, get) => ({
             title: '新建文档',
             content: ''
         })
-    }
+    },
+
+    // Edit History
+    addEditHistory: ({ previousContent, newContent, description }) => set((state) => {
+        const newItem: EditHistoryItem = {
+            id: Math.random().toString(36).substring(2, 9),
+            timestamp: Date.now(),
+            previousContent,
+            newContent,
+            description
+        }
+        return { editHistory: [...state.editHistory, newItem].slice(-10) } // Keep last 10 items
+    }),
+
+    undoLastEdit: () => {
+        const state = get()
+        const editorInstance = state.editorInstance
+        const editHistory = state.editHistory
+
+        if (!editorInstance || editHistory.length === 0) return false
+
+        const lastEdit = editHistory[editHistory.length - 1]
+
+        // Restore previous content
+        editorInstance.commands.setContent(lastEdit.previousContent)
+
+        // Update document in store if active file exists
+        if (state.activeFileId) {
+            const newDocs = state.documents.map(d =>
+                d.id === state.activeFileId ? { ...d, content: lastEdit.previousContent, lastModified: Date.now() } : d
+            )
+            saveDocuments(newDocs)
+
+            set({
+                documents: newDocs,
+                editHistory: editHistory.slice(0, -1) // Remove the undone edit
+            })
+        } else {
+            set({ editHistory: editHistory.slice(0, -1) })
+        }
+
+        return true
+    },
+
+    clearEditHistory: () => set({ editHistory: [] })
 }))

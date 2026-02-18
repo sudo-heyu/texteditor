@@ -29,10 +29,13 @@ import {
     Terminal,
     Download,
     ChevronDown,
+    Undo,
+    Redo,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn, htmlToMarkdown } from '@/lib/utils'
 import { Separator } from '@/components/ui/separator'
+import { useAppStore } from '@/store/useAppStore'
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -82,14 +85,50 @@ const HIGHLIGHT_COLORS = [
 ]
 
 const EditorToolbar = ({ editor }: EditorToolbarProps) => {
+    const { undoLastEdit, editHistory } = useAppStore()
+
     if (!editor) {
         return null
+    }
+
+    const handleUndo = () => {
+        const success = undoLastEdit()
+        if (!success) {
+            // 如果store中的撤销失败，尝试使用编辑器的内置撤销
+            editor.chain().focus().undo().run()
+        }
     }
 
     return (
         <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10 flex flex-col gap-1 p-1 shadow-sm">
             {/* Row 1: Typography & Basic Formatting */}
             <div className="flex flex-wrap gap-1 items-center px-1">
+                {/* Undo Button */}
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleUndo}
+                    className="h-8 w-8"
+                    title="撤销 (Ctrl+Z)"
+                    disabled={editHistory.length === 0 && !editor.can().undo()}
+                >
+                    <Undo className="h-4 w-4" />
+                </Button>
+
+                {/* Redo Button */}
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => editor.chain().focus().redo().run()}
+                    className="h-8 w-8"
+                    title="重做 (Ctrl+Y)"
+                    disabled={!editor.can().redo()}
+                >
+                    <Redo className="h-4 w-4" />
+                </Button>
+
+                <Separator orientation="vertical" className="h-6 mx-1" />
+
                 {/* Font Family */}
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>

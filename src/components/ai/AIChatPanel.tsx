@@ -9,11 +9,7 @@ import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore } from '@/store/useAppStore'
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover"
+import { extractApplyEditContent, safeEditorOperation, handleAIError, parseStreamingTags, createAIPrompt, applyEditorEdit } from '@/lib/ai-utils'
 
 interface Message {
     id: string
@@ -28,8 +24,11 @@ interface AIChatPanelProps {
 }
 
 export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
-    const { aiMode, setAiMode, editorInstance, startPendingEdit, activeFileId, updateDocument } = useAppStore()
+    const { aiMode, setAiMode, editorInstance, startPendingEdit, activeFileId, updateDocument, addEditHistory } = useAppStore()
     const [messages, setMessages] = useState<Message[]>([])
+    const [showEditFeedback, setShowEditFeedback] = useState(false)
+    const [lastEditTime, setLastEditTime] = useState<Date | null>(null)
+    const [isStreamingEdit, setIsStreamingEdit] = useState(false)
 
     // Set initial greeting based on mode if empty
     useEffect(() => {
@@ -119,6 +118,26 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
     const handleSend = async () => {
         if (!input.trim() || isLoading) return
 
+        // Development logging only
+        if (process.env.NODE_ENV === 'development') {
+            console.log('=== handleSend called ===');
+            console.log('Input:', input.trim());
+            console.log('AI Mode:', aiMode);
+            console.log('Editor instance available:', !!editorInstance);
+            console.log('Active file ID:', activeFileId);
+        }
+
+        if (!editorInstance) {
+            console.error('No editor instance available')
+            setMessages((prev) => [...prev, {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: '错误：编辑器未初始化，请刷新页面重试。',
+                timestamp: new Date()
+            }])
+            return
+        }
+
         const userMsgContent = input.trim()
         const userMessage: Message = {
             id: Date.now().toString(),
@@ -134,25 +153,7 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
         try {
             const editorContent = editorInstance?.getHTML() || ''
 
-            const systemPrompt = aiMode === 'ask'
-                ? `You are a helpful AI assistant integrated into a text editor.
-                   CURRENT MODE: ASK (You answer questions and provide suggestions but do NOT attempt to modify the document via tags).
-                   The current document content is: \n\n${editorContent.slice(0, 5000)}...`
-                : `You are an AI Editor Agent. You have DIRECT PERMISSION to modify the document.
-                   CURRENT MODE: AGENT (The user has specifically enabled this mode for you to perform direct edits).
-                   IMPORTANT: You MUST wrap your entire modified HTML content in <apply_edit> tags.
-                   FORMAT: <apply_edit>FULL_HTML_CONTENT_HERE</apply_edit>
-                   CRITICAL RULES:
-                   1. NEVER use markdown code fences (like \`\`\`html) around the <apply_edit> tags
-                   2. Provide the COMPLETE HTML for the document, not just the changes
-                   3. The content inside <apply_edit> must be valid HTML
-                   4. You can explain your changes before or after the <apply_edit> tags
-                   5. Do not include any other HTML tags outside of <apply_edit>
-                   Example:
-                   I've rewritten the introduction to be more engaging:
-                   <apply_edit><h1>New Title</h1><p>Improved content...</p></apply_edit>
-
-                   Current document content: \n\n${editorContent.slice(0, 8000)}`
+            const systemPrompt = createAIPrompt(aiMode, editorContent)
 
             const chatMessages = [
                 { role: 'system', content: systemPrompt },
@@ -189,6 +190,13 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             let accumulatedResponse = ''
             const decoder = new TextDecoder()
 
+            // Streaming edit state for agent mode
+            let isInApplyEdit = false
+            let applyEditBuffer = ''
+            let lastAppliedContent = ''
+            let hasRecordedHistory = false
+            const originalContentBeforeStreaming = editorContent
+
             while (true) {
                 const { done, value } = await reader.read()
                 if (done) break
@@ -209,6 +217,58 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
                                 setMessages((prev) => prev.map(m =>
                                     m.id === assistantId ? { ...m, content: accumulatedResponse } : m
                                 ))
+
+                                // Stream editing for agent mode
+                                if (aiMode === 'agent' && editorInstance) {
+                                    // Use unified streaming tag parser
+                                    const result = parseStreamingTags(content, applyEditBuffer);
+
+                                    // Update buffer and state
+                                    applyEditBuffer = result.buffer;
+                                    isInApplyEdit = result.isInTag;
+
+                                    // Development logging
+                                    if (process.env.NODE_ENV === 'development' && result.isInTag) {
+                                        console.log('Streaming: processing tag content, buffer length:', applyEditBuffer.length);
+                                    }
+
+                                    // If we extracted content, apply it
+                                    if (result.content && result.content !== lastAppliedContent) {
+                                        if (process.env.NODE_ENV === 'development') {
+                                            console.log('Streaming: applying partial edit, length:', result.content.length);
+                                        }
+
+                                        // Apply edit using safe operation
+                                        const success = safeEditorOperation(editorInstance, () => {
+                                            editorInstance.commands.setContent(result.content!);
+                                        });
+
+                                        if (success) {
+                                            lastAppliedContent = result.content!;
+
+                                            // Update document store
+                                            if (activeFileId) {
+                                                updateDocument(activeFileId, result.content!);
+                                            }
+
+                                            // Record edit history (only once per streaming session)
+                                            if (!hasRecordedHistory && activeFileId) {
+                                                addEditHistory({
+                                                    previousContent: originalContentBeforeStreaming,
+                                                    newContent: result.content!,
+                                                    description: `AI流式编辑 (${aiMode === 'agent' ? '智能模式' : '问答模式'})`
+                                                });
+                                                hasRecordedHistory = true;
+                                            }
+
+                                            if (process.env.NODE_ENV === 'development') {
+                                                console.log('Streaming: edit applied successfully');
+                                            }
+                                        } else {
+                                            console.error('Streaming: failed to apply edit');
+                                        }
+                                    }
+                                }
                             }
                         } catch (e) {
                             // Ignore parse errors for incomplete chunks
@@ -218,57 +278,32 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             }
 
             // Auto-trigger preview if an edit was generated in Agent mode
-            console.log('Agent mode check:', { aiMode, hasApplyEditTag: accumulatedResponse.includes('<apply_edit>'), accumulatedResponseLength: accumulatedResponse.length })
-            console.log('First 500 chars of AI response:', accumulatedResponse.substring(0, 500))
-            console.log('Full AI response (last 500 chars):', accumulatedResponse.substring(Math.max(0, accumulatedResponse.length - 500)))
+            if (process.env.NODE_ENV === 'development') {
+                console.log('Agent mode check:', { aiMode, hasApplyEditTag: accumulatedResponse.includes('<apply_edit>'), accumulatedResponseLength: accumulatedResponse.length });
+                console.log('First 500 chars of AI response:', accumulatedResponse.substring(0, 500));
+                console.log('Full AI response (last 500 chars):', accumulatedResponse.substring(Math.max(0, accumulatedResponse.length - 500)));
+            }
 
             if (aiMode === 'agent' && accumulatedResponse.includes('<apply_edit>')) {
-                console.log('Calling applyEdit with response')
-                applyEdit(accumulatedResponse)
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('Calling applyEdit with response');
+                }
+                // If streaming already applied content, skip history to avoid duplicate records
+                const skipHistory = lastAppliedContent !== ''
+                applyEdit(accumulatedResponse, skipHistory)
             } else if (aiMode === 'agent') {
-                console.warn('Agent mode but no <apply_edit> tag found in AI response')
+                if (process.env.NODE_ENV === 'development') {
+                    console.warn('Agent mode but no <apply_edit> tag found in AI response');
+                }
             }
         } catch (error: any) {
-            let errorMessage = '未知错误';
-            let errorCode = 'UNKNOWN';
-
-            try {
-                const errorObj = JSON.parse(error.message);
-                errorMessage = errorObj.message || error.message;
-                errorCode = errorObj.code || 'UNKNOWN';
-            } catch {
-                errorMessage = error.message || '未知错误';
-            }
-
-            let userFriendlyMessage = `抱歉，连接 DeepSeek 时出错: ${errorMessage}`;
-
-            if (errorCode === 'API_KEY_MISSING') {
-                userFriendlyMessage = 'AI 功能暂时不可用: API 密钥未配置。网站管理员需要更新 src/lib/config.ts 文件中的 DEEPSEEK_API_KEY。';
-            } else if (errorCode === 'RATE_LIMIT_ERROR') {
-                userFriendlyMessage = '请求频率过高: 已达到API速率限制，请稍后重试。';
-            } else if (errorCode === 'QUOTA_EXHAUSTED') {
-                userFriendlyMessage = 'API配额已用尽: 请检查DeepSeek账户余额或升级套餐。';
-            } else if (errorCode === 'DEEPSEEK_API_ERROR') {
-                // Check for rate limiting or quota errors (fallback for older error formats)
-                if (errorMessage.toLowerCase().includes('rate') || errorMessage.toLowerCase().includes('quota') || errorMessage.toLowerCase().includes('limit')) {
-                    userFriendlyMessage = 'DeepSeek API 使用已达限额: 请检查API配额或稍后重试。';
-                } else {
-                    userFriendlyMessage = `DeepSeek API 错误: ${errorMessage}`;
-                }
-            } else if (errorCode === 'TIMEOUT_ERROR') {
-                userFriendlyMessage = 'AI 响应超时: 请求时间过长，请简化问题或稍后重试。';
-            } else if (errorCode === 'NETWORK_ERROR') {
-                userFriendlyMessage = '网络连接错误: 无法连接到AI服务，请检查网络连接。';
-            } else if (errorCode === 'INTERNAL_SERVER_ERROR') {
-                userFriendlyMessage = `服务器内部错误: ${errorMessage}`;
-            } else if (errorCode === 'UNKNOWN_API_ERROR') {
-                userFriendlyMessage = `未知API错误: ${errorMessage}`;
-            }
+            // Use unified error handling
+            const { message: errorMessage, code: errorCode } = handleAIError(error);
 
             setMessages((prev) => [...prev, {
                 id: Date.now().toString(),
                 role: 'assistant',
-                content: userFriendlyMessage,
+                content: errorMessage,
                 timestamp: new Date()
             }])
         } finally {
@@ -276,89 +311,33 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
         }
     }
 
-    const applyEdit = (content: string) => {
-        console.log('applyEdit called with content length:', content.length, 'aiMode:', aiMode)
-        if (!editorInstance) {
-            console.error('Editor instance not available')
-            return
-        }
-        console.log('Editor instance available')
+    const applyEdit = (content: string, skipHistory: boolean = false) => {
+        const success = applyEditorEdit(
+            content,
+            editorInstance,
+            activeFileId,
+            updateDocument,
+            aiMode,
+            startPendingEdit,
+            skipHistory ? undefined : addEditHistory
+        );
 
-        // Take a snapshot for preview flow
-        const currentHTML = editorInstance.getHTML()
-        console.log('Current HTML length:', currentHTML.length)
+        if (success) {
+            // 显示编辑应用成功的反馈
+            setShowEditFeedback(true)
+            setLastEditTime(new Date())
 
-        // In agent mode, we apply edits directly without preview
-        // In ask mode or other cases, we might want preview
-        if (aiMode === 'agent') {
-            console.log('Agent mode: applying edit directly without preview')
-        } else {
-            startPendingEdit(currentHTML)
-        }
+            // 3秒后自动隐藏反馈
+            setTimeout(() => {
+                setShowEditFeedback(false)
+            }, 3000)
 
-        // Robust regex to handle potential markdown fences if AI ignores instructions
-        console.log('Searching for <apply_edit> tags in content')
-        // More robust regex that handles whitespace and optional attributes
-        const match = content.match(/<apply_edit(?:\s[^>]*)?>([\s\S]*?)<\/apply_edit>/i)
-        console.log('Regex match result:', match)
-        if (match && match[1]) {
-            console.log('Found apply_edit tag, content length:', match[1].length)
-            try {
-                const newContent = match[1].trim()
-                editorInstance.commands.setContent(newContent)
-                console.log('Edit applied successfully to editor')
-
-                // Also update the document in store (like TiptapEditor's onUpdate does)
-                if (activeFileId) {
-                    console.log('Updating document in store with activeFileId:', activeFileId)
-                    updateDocument(activeFileId, newContent)
-                    console.log('Document updated in store')
-
-                    // Check if document was actually updated
-                    const { documents } = useAppStore.getState()
-                    const updatedDoc = documents.find(d => d.id === activeFileId)
-                    console.log('Updated doc content length:', updatedDoc?.content?.length || 'not found')
-                } else {
-                    console.warn('No activeFileId found, cannot update document in store')
-                }
-
-                // In agent mode, auto-accept the edit (no preview toolbar)
-                if (aiMode === 'agent') {
-                    console.log('Agent mode: edit auto-accepted')
-                    // Optionally, we could automatically finish the pending edit if one was started
-                    // But in agent mode we don't start pending edit, so nothing to do here
-                }
-            } catch (err) {
-                console.error('Failed to apply edit:', err)
-            }
-        } else {
-            console.warn('No <apply_edit> tags found in content, first 500 chars:', content.substring(0, 500))
-
-            // Try alternative parsing methods if AI didn't follow instructions
-            console.log('Attempting alternative parsing methods...')
-
-            // Method 1: Look for HTML content directly (AI might have omitted tags)
-            const htmlMatch = content.match(/<[^>]+>/)
-            if (htmlMatch) {
-                console.log('Found HTML tags in response, attempting to extract HTML content')
-                // Try to find a complete HTML document or fragment
-                // This is a simple fallback - use the entire content as HTML
-                try {
-                    const newContent = content.trim()
-                    editorInstance.commands.setContent(newContent)
-                    console.log('Applied content directly as HTML (fallback)')
-
-                    if (activeFileId) {
-                        updateDocument(activeFileId, newContent)
-                        console.log('Document updated with fallback content')
-                    }
-                } catch (err) {
-                    console.error('Failed to apply fallback edit:', err)
-                }
-            } else {
-                console.log('No HTML tags found in response, cannot apply edit')
+            if (process.env.NODE_ENV === 'development') {
+                console.log('Edit applied successfully');
             }
         }
+
+        return success
     }
 
     if (!isOpen) return null
@@ -462,6 +441,35 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
                     )}
                 </div>
             </ScrollArea>
+
+            {/* Edit Feedback */}
+            {showEditFeedback && (
+                <div className="px-4 pt-3 pb-1 border-b border-green-200/30 bg-green-50/10 backdrop-blur-sm animate-in slide-in-from-top duration-300">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <div className="h-6 w-6 rounded-full bg-green-100 text-green-800 flex items-center justify-center">
+                                <Check className="h-3 w-3" />
+                            </div>
+                            <span className="text-xs font-medium text-green-700">
+                                编辑已成功应用
+                            </span>
+                        </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 w-5 p-0 hover:bg-green-200/30"
+                            onClick={() => setShowEditFeedback(false)}
+                        >
+                            <X className="h-3 w-3 text-green-600" />
+                        </Button>
+                    </div>
+                    {lastEditTime && (
+                        <p className="text-[10px] text-green-600/70 mt-1 ml-8">
+                            于 {lastEditTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </p>
+                    )}
+                </div>
+            )}
 
             {/* Input Area */}
             <div className="p-4 border-t bg-background/80 backdrop-blur-sm">
