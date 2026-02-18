@@ -1,0 +1,21 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Next.js configuration for Netlify
+[functions]
+  # Use Next.js built-in functions (includes Edge Functions)
+  node_bundler = "esbuild"
+
+# Required for Next.js to work properly on Netlify
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Essential redirects for Next.js SPA routing
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
