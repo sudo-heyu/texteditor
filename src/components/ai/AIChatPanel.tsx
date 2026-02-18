@@ -28,7 +28,7 @@ interface AIChatPanelProps {
 }
 
 export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
-    const { aiMode, setAiMode, editorInstance, startPendingEdit } = useAppStore()
+    const { aiMode, setAiMode, editorInstance, startPendingEdit, activeFileId, updateDocument } = useAppStore()
     const [messages, setMessages] = useState<Message[]>([])
 
     // Set initial greeting based on mode if empty
@@ -210,7 +210,9 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             }
 
             // Auto-trigger preview if an edit was generated in Agent mode
+            console.log('Agent mode check:', { aiMode, hasApplyEditTag: accumulatedResponse.includes('<apply_edit>'), accumulatedResponseLength: accumulatedResponse.length })
             if (aiMode === 'agent' && accumulatedResponse.includes('<apply_edit>')) {
+                console.log('Calling applyEdit with response:', accumulatedResponse)
                 applyEdit(accumulatedResponse)
             }
         } catch (error: any) {
@@ -262,25 +264,56 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
     }
 
     const applyEdit = (content: string) => {
+        console.log('applyEdit called with content length:', content.length, 'aiMode:', aiMode)
         if (!editorInstance) {
             console.error('Editor instance not available')
             return
         }
+        console.log('Editor instance available')
 
         // Take a snapshot for preview flow
         const currentHTML = editorInstance.getHTML()
-        startPendingEdit(currentHTML)
+        console.log('Current HTML length:', currentHTML.length)
+
+        // In agent mode, we apply edits directly without preview
+        // In ask mode or other cases, we might want preview
+        if (aiMode === 'agent') {
+            console.log('Agent mode: applying edit directly without preview')
+        } else {
+            startPendingEdit(currentHTML)
+        }
 
         // Robust regex to handle potential markdown fences if AI ignores instructions
-        const match = content.match(/<apply_edit>([\s\S]*?)<\/apply_edit>/)
+        console.log('Searching for <apply_edit> tags in content')
+        // More robust regex that handles whitespace and optional attributes
+        const match = content.match(/<apply_edit(?:\s[^>]*)?>([\s\S]*?)<\/apply_edit>/i)
+        console.log('Regex match result:', match)
         if (match && match[1]) {
+            console.log('Found apply_edit tag, content length:', match[1].length)
             try {
-                editorInstance.commands.setContent(match[1].trim())
+                const newContent = match[1].trim()
+                editorInstance.commands.setContent(newContent)
+                console.log('Edit applied successfully to editor')
+
+                // Also update the document in store (like TiptapEditor's onUpdate does)
+                if (activeFileId) {
+                    updateDocument(activeFileId, newContent)
+                    console.log('Document updated in store with activeFileId:', activeFileId)
+                } else {
+                    console.warn('No activeFileId found, cannot update document in store')
+                }
+
+                // In agent mode, auto-accept the edit (no preview toolbar)
+                if (aiMode === 'agent') {
+                    console.log('Agent mode: edit auto-accepted')
+                    // Optionally, we could automatically finish the pending edit if one was started
+                    // But in agent mode we don't start pending edit, so nothing to do here
+                }
             } catch (err) {
                 console.error('Failed to apply edit:', err)
             }
         } else {
-            console.warn('No <apply_edit> tags found in content')
+            console.warn('No <apply_edit> tags found in content, first 500 chars:', content.substring(0, 500))
         }
     }
 
