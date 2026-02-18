@@ -250,6 +250,9 @@ export default function TiptapEditor({ className }: EditorProps) {
     // Sync editor content with active document
     React.useEffect(() => {
         if (editor && activeDoc && editor.getHTML() !== activeDoc.content) {
+            console.log('TiptapEditor useEffect: Syncing editor with activeDoc, content differs')
+            console.log('Editor content length:', editor.getHTML().length)
+            console.log('ActiveDoc content length:', activeDoc.content.length)
             editor.commands.setContent(activeDoc.content)
         }
     }, [activeFileId, editor]) // Only run when activeFileId changes or editor is ready

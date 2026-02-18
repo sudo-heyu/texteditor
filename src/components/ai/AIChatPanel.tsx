@@ -140,11 +140,19 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
                    The current document content is: \n\n${editorContent.slice(0, 5000)}...`
                 : `You are an AI Editor Agent. You have DIRECT PERMISSION to modify the document.
                    CURRENT MODE: AGENT (The user has specifically enabled this mode for you to perform direct edits).
-                   When the user asks for changes, provide the full improved HTML content wrapped in <apply_edit> tags. 
-                   CRITICAL: Do not include any markdown code fences (like \`\`\`html) around the <apply_edit> tags.
-                   Example: <apply_edit><h1>New Title</h1><p>Improved content...</p></apply_edit>
-                   Always explain what you changed before or after the tag.
-                   Current content: \n\n${editorContent.slice(0, 8000)}`
+                   IMPORTANT: You MUST wrap your entire modified HTML content in <apply_edit> tags.
+                   FORMAT: <apply_edit>FULL_HTML_CONTENT_HERE</apply_edit>
+                   CRITICAL RULES:
+                   1. NEVER use markdown code fences (like \`\`\`html) around the <apply_edit> tags
+                   2. Provide the COMPLETE HTML for the document, not just the changes
+                   3. The content inside <apply_edit> must be valid HTML
+                   4. You can explain your changes before or after the <apply_edit> tags
+                   5. Do not include any other HTML tags outside of <apply_edit>
+                   Example:
+                   I've rewritten the introduction to be more engaging:
+                   <apply_edit><h1>New Title</h1><p>Improved content...</p></apply_edit>
+
+                   Current document content: \n\n${editorContent.slice(0, 8000)}`
 
             const chatMessages = [
                 { role: 'system', content: systemPrompt },
@@ -211,9 +219,14 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
 
             // Auto-trigger preview if an edit was generated in Agent mode
             console.log('Agent mode check:', { aiMode, hasApplyEditTag: accumulatedResponse.includes('<apply_edit>'), accumulatedResponseLength: accumulatedResponse.length })
+            console.log('First 500 chars of AI response:', accumulatedResponse.substring(0, 500))
+            console.log('Full AI response (last 500 chars):', accumulatedResponse.substring(Math.max(0, accumulatedResponse.length - 500)))
+
             if (aiMode === 'agent' && accumulatedResponse.includes('<apply_edit>')) {
-                console.log('Calling applyEdit with response:', accumulatedResponse)
+                console.log('Calling applyEdit with response')
                 applyEdit(accumulatedResponse)
+            } else if (aiMode === 'agent') {
+                console.warn('Agent mode but no <apply_edit> tag found in AI response')
             }
         } catch (error: any) {
             let errorMessage = '未知错误';
@@ -297,8 +310,14 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
 
                 // Also update the document in store (like TiptapEditor's onUpdate does)
                 if (activeFileId) {
+                    console.log('Updating document in store with activeFileId:', activeFileId)
                     updateDocument(activeFileId, newContent)
-                    console.log('Document updated in store with activeFileId:', activeFileId)
+                    console.log('Document updated in store')
+
+                    // Check if document was actually updated
+                    const { documents } = useAppStore.getState()
+                    const updatedDoc = documents.find(d => d.id === activeFileId)
+                    console.log('Updated doc content length:', updatedDoc?.content?.length || 'not found')
                 } else {
                     console.warn('No activeFileId found, cannot update document in store')
                 }
@@ -314,6 +333,31 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             }
         } else {
             console.warn('No <apply_edit> tags found in content, first 500 chars:', content.substring(0, 500))
+
+            // Try alternative parsing methods if AI didn't follow instructions
+            console.log('Attempting alternative parsing methods...')
+
+            // Method 1: Look for HTML content directly (AI might have omitted tags)
+            const htmlMatch = content.match(/<[^>]+>/)
+            if (htmlMatch) {
+                console.log('Found HTML tags in response, attempting to extract HTML content')
+                // Try to find a complete HTML document or fragment
+                // This is a simple fallback - use the entire content as HTML
+                try {
+                    const newContent = content.trim()
+                    editorInstance.commands.setContent(newContent)
+                    console.log('Applied content directly as HTML (fallback)')
+
+                    if (activeFileId) {
+                        updateDocument(activeFileId, newContent)
+                        console.log('Document updated with fallback content')
+                    }
+                } catch (err) {
+                    console.error('Failed to apply fallback edit:', err)
+                }
+            } else {
+                console.log('No HTML tags found in response, cannot apply edit')
+            }
         }
     }
 
