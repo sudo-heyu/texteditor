@@ -16,15 +16,15 @@ export default function MainView() {
     return (
         <div className="flex flex-col h-full w-full bg-background relative">
             {/* Header */}
-            <header className="flex h-14 items-center gap-4 border-b bg-background px-4 shrink-0">
-                <div className="flex items-center gap-2">
+            <header className="flex h-14 items-center gap-2 sm:gap-4 border-b bg-background px-2 sm:px-4 shrink-0 overflow-x-auto scrollbar-hidden">
+                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                     <FileText className="h-4 w-4 text-muted-foreground" />
-                    <h1 className="text-sm font-medium">{activeDoc?.title || '未命名文档'}</h1>
+                    <h1 className="text-xs sm:text-sm font-medium truncate max-w-[80px] sm:max-w-[200px]">{activeDoc?.title || '未命名文档'}</h1>
                 </div>
 
                 {/* View Mode Tabs */}
-                <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as any)} className="flex-1">
-                    <TabsList className="h-9">
+                <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as any)} className="flex-1 min-w-[200px]">
+                    <TabsList className="h-9 w-full grid grid-cols-3">
                         <TabsTrigger value="editor" className="gap-2">
                             <FileText className="h-3.5 w-3.5" />
                             编辑器
@@ -40,8 +40,8 @@ export default function MainView() {
                     </TabsList>
                 </Tabs>
 
-                <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">自动保存</span>
+                <div className="flex items-center gap-2 shrink-0 ml-auto">
+                    <span className="hidden sm:inline text-xs text-muted-foreground">自动保存</span>
                     <Button
                         variant={isAIPanelOpen ? "default" : "outline"}
                         size="sm"

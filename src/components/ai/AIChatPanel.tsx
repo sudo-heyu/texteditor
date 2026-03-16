@@ -356,7 +356,7 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
     return (
         <div
             className={cn(
-                "fixed right-0 top-0 h-full bg-background border-l shadow-lg flex flex-col z-[10001] animate-in slide-in-from-right duration-300 transition-[width]",
+                "fixed right-0 top-0 h-full max-w-[100vw] bg-background border-l shadow-lg flex flex-col z-[10001] animate-in slide-in-from-right duration-300 transition-[width]",
                 isResizing ? "transition-none shadow-2xl ring-2 ring-primary/20" : ""
             )}
             style={{ width: `${width}px` }}

@@ -100,9 +100,9 @@ const EditorToolbar = ({ editor }: EditorToolbarProps) => {
     }
 
     return (
-        <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10 flex flex-col gap-1 p-1 shadow-sm">
+        <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10 flex flex-col gap-1 p-1 shadow-sm overflow-x-auto scrollbar-hidden">
             {/* Row 1: Typography & Basic Formatting */}
-            <div className="flex flex-wrap gap-1 items-center px-1">
+            <div className="flex flex-nowrap whitespace-nowrap min-w-max gap-1 items-center px-1">
                 {/* Undo Button */}
                 <Button
                     variant="ghost"
@@ -286,7 +286,7 @@ const EditorToolbar = ({ editor }: EditorToolbarProps) => {
             </div>
 
             {/* Row 2: Structure & Elements */}
-            <div className="flex flex-wrap gap-1 items-center px-1">
+            <div className="flex flex-nowrap whitespace-nowrap min-w-max gap-1 items-center px-1">
                 {/* Headings */}
                 <Button
                     variant="ghost"
