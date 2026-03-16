@@ -11,14 +11,19 @@ export function extractApplyEditContent(content: string): string | null {
   const match = content.match(pattern);
 
   if (match && match[1]) {
-    const extracted = match[1].trim();
+    let extracted = match[1].trim();
 
-    // 清理可能的markdown代码块（AI有时会忽略指令）
-    const cleaned = extracted.replace(/^```(?:html)?\s*|\s*```$/g, '');
+    // Clean up potential markdown code block wrappers
+    extracted = extracted.replace(/^```(?:html)?\s*([\s\S]*?)\s*```$/i, '$1');
 
-    // 验证HTML有效性
-    if (validateHTMLContent(cleaned)) {
-      return cleaned;
+    // Remove any text before the first HTML tag if it looks like conversational filler
+    const firstTagIndex = extracted.indexOf('<');
+    if (firstTagIndex > 0 && firstTagIndex < 50) {
+      extracted = extracted.substring(firstTagIndex);
+    }
+
+    if (validateHTMLContent(extracted)) {
+      return extracted;
     }
   }
 
@@ -41,22 +46,22 @@ export function validateHTMLContent(html: string): boolean {
     return false;
   }
 
-  // 检查常见的标签配对（简化检查）
+  // Check common tag pairs (relaxed check to allow partial streams or simpler HTML)
   const tagPairs = [
     { open: /<div[^>]*>/gi, close: /<\/div>/gi },
     { open: /<p[^>]*>/gi, close: /<\/p>/gi },
     { open: /<h[1-6][^>]*>/gi, close: /<\/h[1-6]>/gi },
-    { open: /<span[^>]*>/gi, close: /<\/span>/gi },
   ];
 
-  // 简单验证：如果检测到开始标签，应该也有对应的结束标签
+  // For validation, we don't strictly fail on mismatched tags here because 
+  // the AI might generate valid HTML fragments (like a list item without a ul, 
+  // or a fragment due to streaming), and Tiptap is quite good at sanitizing it.
   for (const pair of tagPairs) {
     const openMatches = html.match(pair.open) || [];
     const closeMatches = html.match(pair.close) || [];
     if (openMatches.length > 0 && openMatches.length !== closeMatches.length) {
-      // 标签不配对，但可能是自闭合标签或其他情况
-      // 这里不严格失败，只记录警告
-      console.warn(`HTML validation: mismatched tags found`);
+      // Just log a warning, don't fail validation
+      console.warn(`HTML validation: mismatched tags found for pattern ${pair.open}`);
     }
   }
 
@@ -81,39 +86,29 @@ RESPONSE GUIDELINES:
 
 DOCUMENT CONTEXT:
 The current document content is:
-${truncateWithEllipsis(editorContent, 5000)}`;
+${truncateWithEllipsis(editorContent, 3000)}`;
   } else {
     return `You are an AI editing assistant integrated into a text editor.
-CURRENT MODE: AGENT (You can directly edit the document)
+CURRENT MODE: AGENT (You will directly edit the document)
 
-IMPORTANT INSTRUCTIONS:
-1. ALWAYS wrap your HTML response in <apply_edit> tags
-2. Provide the COMPLETE HTML document, not just modified parts
-3. Ensure HTML is valid and well-formed with proper closing tags
-4. Preserve the document structure and important elements
-5. Maintain semantic HTML (use appropriate tags: h1-h6 for headings, p for paragraphs, etc.)
-6. You may add explanations before or after the tags
+CRITICAL INSTRUCTIONS:
+1. You MUST output your edited HTML wrapped EXACTLY in <apply_edit>...</apply_edit> tags.
+2. DO NOT include markdown code block formatting (\`\`\`html) around the tags.
+3. DO NOT include conversational filler like "Here is the updated text:". ONLY output the <apply_edit> block.
+4. Output the COMPLETE edited document, ensuring HTML is valid.
 
 EDITING GUIDELINES:
-- When rewriting: Keep the core message but improve clarity, grammar, or style
-- When formatting: Use appropriate CSS classes or inline styles
-- When adding content: Ensure it fits contextually with existing content
-- When correcting: Fix errors while preserving the author's intent
-- When translating: Maintain meaning and tone
+- Output valid HTML that Tiptap can parse (use h1-h6, p, strong, em, pre, code, ul, ol, li, etc.).
+- Maintain semantic structure and preserve the author's overall intent.
 
-EXAMPLES:
-- Rewriting: "I've improved the introduction: <apply_edit><h1>Enhanced Title</h1><p>Revised content with better clarity...</p></apply_edit>"
-- Formatting: "Applied better formatting: <apply_edit><div style="max-width: 800px; margin: 0 auto"><h1>Title</h1><p>Content...</p></div></apply_edit>"
-- Adding: "Added a conclusion section: <apply_edit><h2>Conclusion</h2><p>Summary of key points...</p></apply_edit>"
-- Correcting: "Fixed grammar and spelling: <apply_edit><p>Corrected text with proper grammar...</p></apply_edit>"
+EXAMPLE OF YOUR ENTIRE RESPONSE:
+<apply_edit>
+<h1>New Title</h1>
+<p>This is the newly rewritten document content.</p>
+</apply_edit>
 
-RESPONSE STRUCTURE:
-1. Brief explanation of changes (optional)
-2. <apply_edit>FULL_HTML_CONTENT</apply_edit>
-3. Additional notes or suggestions (optional)
-
-Current document content (first 8000 chars):
-${truncateWithEllipsis(editorContent, 8000)}`;
+Current document content:
+${truncateWithEllipsis(editorContent, 5000)}`;
   }
 }
 
@@ -311,37 +306,13 @@ export function applyEditorEdit(
       console.warn('No valid <apply_edit> tags found in AI response');
     }
 
-    // 后备方案：检查内容是否直接包含HTML标签
-    const hasHTMLTags = /<[^>]+>/.test(content);
-    if (hasHTMLTags) {
-      // 后备方案：直接使用内容作为HTML
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('Falling back to using content directly as HTML');
-      }
-
-      const fallbackSuccess = safeEditorOperation(editorInstance, () => {
-        editorInstance.commands.setContent(content.trim());
-      });
-
-      if (fallbackSuccess && activeFileId) {
-        updateDocument(activeFileId, content.trim());
-
-        // 记录编辑历史
-        if (addEditHistory) {
-          addEditHistory({
-            previousContent: currentHTML,
-            newContent: content.trim(),
-            description: `AI编辑后备方案 (${mode === 'agent' ? '智能模式' : '问答模式'})`
-          });
-        }
-
-        return true;
-      }
-    } else {
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('AI response contains no HTML content, cannot apply edit');
-      }
+    // Fallback logic is disabled in Agent mode to prevent chat text from wiping the editor.
+    // If we're here, it means the <apply_edit> parsing genuinely failed.
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('AI response contains no valid <apply_edit> block, aborting fallback to avoid corruption');
     }
+    // We throw or return false so the UI can show a failure message rather than inserting bad text
+    return false;
   }
 
   return false;

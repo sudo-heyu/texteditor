@@ -26,7 +26,7 @@ interface AIChatPanelProps {
 export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
     const { aiMode, setAiMode, editorInstance, startPendingEdit, activeFileId, updateDocument, addEditHistory } = useAppStore()
     const [messages, setMessages] = useState<Message[]>([])
-    const [showEditFeedback, setShowEditFeedback] = useState(false)
+    const [showEditFeedback, setShowEditFeedback] = useState<{show: boolean, success: boolean, message?: string}>({ show: false, success: false })
     const [lastEditTime, setLastEditTime] = useState<Date | null>(null)
     const [isStreamingEdit, setIsStreamingEdit] = useState(false)
 
@@ -155,9 +155,11 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
 
             const systemPrompt = createAIPrompt(aiMode, editorContent)
 
+            // Limit history to the last 6 messages to save tokens and reduce compute costs
+            const recentMessages = messages.slice(-6);
             const chatMessages = [
                 { role: 'system', content: systemPrompt },
-                ...messages.map(m => ({ role: m.role, content: m.content })),
+                ...recentMessages.map(m => ({ role: m.role, content: m.content })),
                 { role: 'user', content: userMsgContent }
             ]
 
@@ -324,17 +326,26 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
 
         if (success) {
             // 显示编辑应用成功的反馈
-            setShowEditFeedback(true)
+            setShowEditFeedback({ show: true, success: true, message: '编辑已成功应用' })
             setLastEditTime(new Date())
 
             // 3秒后自动隐藏反馈
             setTimeout(() => {
-                setShowEditFeedback(false)
+                setShowEditFeedback(prev => ({ ...prev, show: false }))
             }, 3000)
 
             if (process.env.NODE_ENV === 'development') {
                 console.log('Edit applied successfully');
             }
+        } else {
+             // 显示编辑应用失败的反馈
+             setShowEditFeedback({ show: true, success: false, message: '未能应用编辑，AI生成的内容格式无效' })
+             setLastEditTime(new Date())
+ 
+             // 5秒后自动隐藏反馈
+             setTimeout(() => {
+                 setShowEditFeedback(prev => ({ ...prev, show: false }))
+             }, 5000)
         }
 
         return success
@@ -377,8 +388,16 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             {/* Messages */}
             <ScrollArea className="flex-1 min-h-0 p-4" ref={scrollRef}>
                 <div className="space-y-6 pb-4">
-                    {messages.filter(m => m.role !== 'system').map((message) => {
-                        const hasEdit = message.content.includes('<apply_edit>')
+                    {messages.filter(m => m.role !== 'system').map((message, index) => {
+                        const isAssistant = message.role === 'assistant';
+                        const isAgentMode = aiMode === 'agent';
+                        const isLastMessage = index === messages.filter(m => m.role !== 'system').length - 1;
+                        const isCurrentlyStreaming = isAssistant && isLastMessage && isLoading;
+                        
+                        // We hide the initial welcoming message from this logic (id '1') 
+                        // so it still renders normally even in Agent mode
+                        const isAgentOutput = isAgentMode && isAssistant && message.id !== '1';
+
                         return (
                             <div
                                 key={message.id}
@@ -389,13 +408,14 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
                             >
                                 <div
                                     className={cn(
-                                        'max-w-[90%] rounded-2xl px-4 py-2.5 shadow-sm',
+                                        'max-w-[90%] rounded-2xl px-3 py-1.5 shadow-sm',
                                         message.role === 'user'
                                             ? 'bg-primary text-primary-foreground rounded-tr-none'
-                                            : 'bg-muted rounded-tl-none border border-border/50'
+                                            : 'bg-muted rounded-tl-none border border-border/50',
+                                        isAgentOutput && isCurrentlyStreaming ? 'animate-pulse bg-primary/5 border-primary/20' : ''
                                     )}
                                 >
-                                    <div className="flex items-center gap-2 mb-1.5 px-0.5">
+                                    <div className="flex items-center gap-2 -mt-1 -mx-0.5 mb-0.5">
                                         <div className={cn(
                                             "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
                                             message.role === 'user' ? "bg-primary/20 text-primary border border-primary/20" : "bg-muted text-muted-foreground border border-border"
@@ -403,35 +423,36 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
                                             {message.role === 'user' ? 'YOU' : 'AI'}
                                         </div>
                                     </div>
-                                    <div className={cn(
-                                        "prose prose-sm dark:prose-invert break-words",
-                                        message.role === 'user' ? "text-primary-foreground prose-p:text-primary-foreground" : "text-foreground"
-                                    )}>
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {message.content.replace(/<apply_edit>[\s\S]*?<\/apply_edit>/g, '*(已生成文档建议，请查看下方按钮)*')}
-                                        </ReactMarkdown>
-                                    </div>
-
-                                    {hasEdit && message.role === 'assistant' && (
-                                        <div className="mt-3 pt-3 border-t border-border/50 flex flex-col gap-2">
-                                            <div className="flex items-center gap-2 text-[10px] text-primary font-medium">
-                                                <Sparkles className="h-3 w-3" />
-                                                修改建议已自动应用到编辑器
-                                            </div>
+                                    
+                                    {isAgentOutput ? (
+                                        <div className="flex flex-col gap-2 py-1">
+                                            {isCurrentlyStreaming ? (
+                                                <div className="flex items-center gap-2 text-primary font-medium text-sm">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    <span>正在思考并编辑文档...</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex items-center gap-2 text-green-600 dark:text-green-500 font-medium text-sm">
+                                                    <Check className="h-4 w-4" />
+                                                    <span>编辑操作已生成并应用</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className={cn(
+                                            "prose prose-sm dark:prose-invert break-words",
+                                            message.role === 'user' ? "text-primary-foreground prose-p:text-primary-foreground" : "text-foreground"
+                                        )}>
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {message.content.replace(/<apply_edit>[\s\S]*?<\/apply_edit>/g, '*(已生成文档建议，直接更新至编辑器)*')}
+                                            </ReactMarkdown>
                                         </div>
                                     )}
-
-                                    <p className="text-[10px] opacity-50 mt-2 text-right">
-                                        {message.timestamp.toLocaleTimeString('zh-CN', {
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                        })}
-                                    </p>
                                 </div>
                             </div>
                         )
                     })}
-                    {isLoading && !messages[messages.length - 1]?.content && (
+                    {isLoading && !messages[messages.length - 1]?.content && aiMode === 'ask' && (
                         <div className="flex justify-start">
                             <div className="bg-muted rounded-2xl rounded-tl-none px-4 py-3 flex items-center gap-2 border border-border/50 shadow-sm">
                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
@@ -443,28 +464,46 @@ export default function AIChatPanel({ isOpen, onClose }: AIChatPanelProps) {
             </ScrollArea>
 
             {/* Edit Feedback */}
-            {showEditFeedback && (
-                <div className="px-4 pt-3 pb-1 border-b border-green-200/30 bg-green-50/10 backdrop-blur-sm animate-in slide-in-from-top duration-300">
+            {showEditFeedback.show && (
+                <div className={cn(
+                    "px-4 pt-3 pb-1 border-b backdrop-blur-sm animate-in slide-in-from-top duration-300",
+                    showEditFeedback.success ? "border-green-200/30 bg-green-50/10" : "border-red-200/30 bg-red-50/10"
+                )}>
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                            <div className="h-6 w-6 rounded-full bg-green-100 text-green-800 flex items-center justify-center">
-                                <Check className="h-3 w-3" />
+                            <div className={cn(
+                                "h-6 w-6 rounded-full flex items-center justify-center",
+                                showEditFeedback.success ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                            )}>
+                                {showEditFeedback.success ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
                             </div>
-                            <span className="text-xs font-medium text-green-700">
-                                编辑已成功应用
+                            <span className={cn(
+                                "text-xs font-medium",
+                                showEditFeedback.success ? "text-green-700" : "text-red-700"
+                            )}>
+                                {showEditFeedback.message}
                             </span>
                         </div>
                         <Button
                             variant="ghost"
                             size="sm"
-                            className="h-5 w-5 p-0 hover:bg-green-200/30"
-                            onClick={() => setShowEditFeedback(false)}
+                            className={cn(
+                                "h-5 w-5 p-0",
+                                showEditFeedback.success ? "hover:bg-green-200/30" : "hover:bg-red-200/30"
+                            )}
+                            onClick={() => setShowEditFeedback(prev => ({ ...prev, show: false }))}
                         >
-                            <X className="h-3 w-3 text-green-600" />
+                            <X className={cn(
+                                "h-3 w-3",
+                                showEditFeedback.success ? "text-green-600" : "text-red-600"
+                            )} />
                         </Button>
                     </div>
                     {lastEditTime && (
-                        <p className="text-[10px] text-green-600/70 mt-1 ml-8">
+                        <p className={cn(
+                            "text-[10px] mt-1 ml-8",
+                            showEditFeedback.success ? "text-green-600/70" : "text-red-600/70"
+                        )}>
                             于 {lastEditTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                         </p>
                     )}

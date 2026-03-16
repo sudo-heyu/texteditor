@@ -33,6 +33,8 @@ export async function POST(req: NextRequest) {
                 model: 'deepseek-chat',
                 messages,
                 stream: true,
+                temperature: 0.3,    // Low temperature for more deterministic, focused editing
+                max_tokens: 2000,    // Cap the output to prevent runaway token usage
             }),
             signal: controller.signal,
         });
